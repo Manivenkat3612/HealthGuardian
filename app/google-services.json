@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "273310097648",
+    "project_id": "urbansafety-a902a",
+    "storage_bucket": "urbansafety-a902a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:273310097648:android:a6c453a6ffe1dd3fc26235",
+        "android_client_info": {
+          "package_name": "com.example.urban_safety"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "273310097648-a46mh75c2vintt6kisos39f2d05cq2qo.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.urban_safety",
+            "certificate_hash": "9dc40862640e6fed1578e286fd7fd2ab9523cb7b"
+          }
+        },
+        {
+          "client_id": "273310097648-fjggorfi3tmr1kvk3d19dja4qf705sen.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDnQDA9I9leiUXYQpFASMFOZpmtf-6qsAs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "273310097648-fjggorfi3tmr1kvk3d19dja4qf705sen.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+} 

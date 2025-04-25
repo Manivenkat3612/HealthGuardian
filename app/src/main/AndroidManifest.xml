@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Internet permissions -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    
+    <!-- Location permissions -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission 
+        android:name="android.permission.ACCESS_BACKGROUND_LOCATION"
+        android:maxSdkVersion="32" />
+    
+    <!-- Wearable permissions -->
+    <uses-permission 
+        android:name="android.permission.BODY_SENSORS"
+        android:protectionLevel="dangerous" />
+    <uses-permission 
+        android:name="android.permission.ACTIVITY_RECOGNITION"
+        android:maxSdkVersion="32" />
+    
+    <!-- Notification permissions -->
+    <uses-permission 
+        android:name="android.permission.POST_NOTIFICATIONS"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    
+    <!-- SMS for emergency messaging -->
+    <uses-permission 
+        android:name="android.permission.SEND_SMS"
+        android:protectionLevel="dangerous" />
+    
+    <!-- For voice-activated SOS -->
+    <uses-permission 
+        android:name="android.permission.RECORD_AUDIO"
+        android:protectionLevel="dangerous" />
+    
+    <!-- For foreground service (important for location tracking) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    
+    <!-- Optional: For geofencing -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:name=".HealthGuardianApp"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.UrbanSafety"
+        tools:targetApi="31">
+        
+        <!-- Main Activity -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.UrbanSafety">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        
+        <!-- New SOS Response activity -->
+        <activity
+            android:name=".ui.screens.community.SosResponseActivity"
+            android:exported="false"
+            android:theme="@style/Theme.UrbanSafety">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        
+        <!-- Firebase Cloud Messaging Service -->
+        <service
+            android:name=".services.UrbanSafetyFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        
+        <!-- Location tracking service -->
+        <service
+            android:name=".services.LocationTrackingService"
+            android:foregroundServiceType="location"
+            android:exported="false"
+            android:permission="android.permission.BIND_FOREGROUND_SERVICE" />
+            
+        <!-- Voice recognition service -->
+        <service
+            android:name=".services.VoiceRecognitionService"
+            android:foregroundServiceType="microphone"
+            android:exported="false"
+            android:permission="android.permission.BIND_FOREGROUND_SERVICE" />
+            
+        <!-- Health monitoring service -->
+        <service
+            android:name=".services.HealthMonitoringService"
+            android:exported="false"
+            android:permission="android.permission.BIND_FOREGROUND_SERVICE" />
+            
+        <!-- For background geofencing -->
+        <receiver
+            android:name=".receivers.GeofenceBroadcastReceiver"
+            android:exported="false" />
+            
+        <!-- For SOS activation -->
+        <receiver
+            android:name=".receivers.SOSBroadcastReceiver"
+            android:exported="false" />
+            
+        <!-- For boot completion -->
+        <receiver
+            android:name=".receivers.BootCompletedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        
+        <!-- Meta-data for OSM -->
+        <meta-data
+            android:name="org.osmdroid.tilesource"
+            android:value="MAPNIK" />
+    </application>
+
+</manifest>
