@@ -27,6 +27,11 @@ import java.util.Date
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.Result
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /**
  * Repository for safety incident and emergency operations
@@ -46,6 +51,10 @@ class SafetyRepository @Inject constructor(
     private val incidentsRef = realtime.getReference("safety_incidents")
     private val emergencyContactsCollection = firestore.collection(Constants.EMERGENCY_CONTACTS_COLLECTION)
     private val incidentsCollection = firestore.collection(Constants.INCIDENTS_COLLECTION)
+    
+    // Cache emergency contacts in memory to reduce network calls
+    private val emergencyContactsCache = mutableMapOf<String, Pair<List<EmergencyContact>, Long>>()
+    private val CACHE_EXPIRY_MS = 5 * 60 * 1000 // 5 minutes
     
     /**
      * Gets the current user ID
@@ -77,38 +86,27 @@ class SafetyRepository @Inject constructor(
                 description = description
             )
             
-            // First try Firestore
-            try {
-                incidentsCollection.document(incidentId).set(incident).await()
-            } catch (e: Exception) {
-                // Log error but continue with Realtime Database
-                println("Firestore write failed: ${e.message}")
-            }
-            
-            // Then try Realtime Database
-            try {
-                incidentsRef.child(incidentId).setValue(incident).await()
-            } catch (e: Exception) {
-                // If both databases fail, throw error
-                if (!incident.isSavedToFirestore) {
-                    throw Exception("Failed to save incident to both databases")
-                }
-            }
-            
-            // Save to local Room database
+            // First save to local Room database immediately for responsiveness
             try {
                 safetyIncidentDao.insertIncident(incident)
             } catch (e: Exception) {
-                // Log error but don't fail the operation
                 println("Local database write failed: ${e.message}")
             }
             
-            // Notify emergency contacts
+            // Immediately handle emergency notifications
+            notifyEmergencyContacts(incident, user.uid)
+            
+            // Then save to Firebase databases
             try {
-                notifyEmergencyContacts(incident, user.uid)
+                incidentsCollection.document(incidentId).set(incident).await()
             } catch (e: Exception) {
-                // Log error but don't fail the operation
-                println("Emergency contact notification failed: ${e.message}")
+                println("Firestore write failed: ${e.message}")
+            }
+            
+            try {
+                incidentsRef.child(incidentId).setValue(incident).await()
+            } catch (e: Exception) {
+                println("Realtime Database write failed: ${e.message}")
             }
             
             return Result.success(incident)
@@ -218,9 +216,17 @@ class SafetyRepository @Inject constructor(
     }
     
     /**
-     * Gets all emergency contacts for a user
+     * Gets all emergency contacts for a user with caching
      */
     suspend fun getEmergencyContacts(userId: String): Result<List<EmergencyContact>> {
+        // Check if we have a fresh cache
+        val cachedEntry = emergencyContactsCache[userId]
+        val currentTime = System.currentTimeMillis()
+        
+        if (cachedEntry != null && (currentTime - cachedEntry.second < CACHE_EXPIRY_MS)) {
+            return Result.success(cachedEntry.first)
+        }
+        
         return try {
             val contacts = emergencyContactsCollection
                 .whereEqualTo("userId", userId)
@@ -228,9 +234,17 @@ class SafetyRepository @Inject constructor(
                 .await()
                 .documents
                 .mapNotNull { it.toObject(EmergencyContact::class.java) }
-                
+            
+            // Cache the result
+            emergencyContactsCache[userId] = Pair(contacts, currentTime)
+            
             Result.success(contacts)
         } catch (e: Exception) {
+            // If network fails but we have any cached data, use it even if expired
+            cachedEntry?.let {
+                return Result.success(it.first)
+            }
+            
             Result.failure(e)
         }
     }
@@ -337,14 +351,33 @@ class SafetyRepository @Inject constructor(
             
             val fullMessage = "$message$locationText"
             
+            // Use divideMessage for long messages
+            val messageParts = smsManager.divideMessage(fullMessage)
+            
+            // Send SMS to all contacts one by one (without parallel processing)
             contacts.forEach { contact ->
-                smsManager.sendTextMessage(
-                    contact.phoneNumber,
-                    null,
-                    fullMessage,
-                    null,
-                    null
-                )
+                try {
+                    // For long messages, use sendMultipartTextMessage
+                    if (messageParts.size > 1) {
+                        smsManager.sendMultipartTextMessage(
+                            contact.phoneNumber,
+                            null,
+                            messageParts,
+                            null,
+                            null
+                        )
+                    } else {
+                        smsManager.sendTextMessage(
+                            contact.phoneNumber,
+                            null,
+                            fullMessage,
+                            null,
+                            null
+                        )
+                    }
+                } catch (e: Exception) {
+                    println("Failed to send SMS to ${contact.phoneNumber}: ${e.message}")
+                }
             }
             
             Result.success(Unit)
@@ -358,16 +391,18 @@ class SafetyRepository @Inject constructor(
      */
     private suspend fun notifyEmergencyContacts(incident: SafetyIncident, userId: String) {
         try {
+            // Try to use cached contacts first for immediate notification
             val contactsResult = getEmergencyContacts(userId)
             if (contactsResult.isSuccess) {
                 val contacts = contactsResult.getOrNull() ?: emptyList()
-                val message = "EMERGENCY: ${incident.type} incident reported by your contact. Please respond immediately."
-                
-                // Use the incident.location directly instead of creating a new one
-                sendEmergencySMS(contacts, message, incident.location)
+                if (contacts.isNotEmpty()) {
+                    val message = "EMERGENCY: ${incident.type} incident reported by your contact. Please respond immediately."
+                    
+                    // Send SMS urgently
+                    sendEmergencySMS(contacts, message, incident.location)
+                }
             }
         } catch (e: Exception) {
-            // Log the error but don't fail the operation
             println("Failed to notify emergency contacts: ${e.message}")
         }
     }

@@ -19,6 +19,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Job
 import javax.inject.Inject
 
 @HiltViewModel
@@ -72,78 +77,158 @@ class ManualSOSViewModel @Inject constructor(
             return
         }
         
-        viewModelScope.launch {
-            _isLoading.value = true
+        // Set active immediately for UI responsiveness
+        _isSosActive.value = true
+        _isLoading.value = true
+        
+        viewModelScope.launch(Dispatchers.IO) {
             try {
+                // Pre-fetch contacts in parallel immediately
+                val contactsFuture = async {
+                    fetchEmergencyContacts(currentUser.uid)
+                }
+                
                 // Get current location
-                val locationResult = locationRepository.getLastLocation()
-                val currentLocation = locationResult.getOrNull()
-                
-                // Create the incident
-                val result = safetyRepository.createSafetyIncident(
-                    type = IncidentType.MANUAL_SOS,
-                    locationData = currentLocation,
-                    description = "Manual SOS triggered by user"
-                )
-                
-                if (result.isSuccess) {
-                    _isSosActive.value = true
-                    // Send messages to emergency contacts
-                    sendEmergencyMessages(currentLocation)
-                    // Notify nearby community helpers
-                    notifyNearbyHelpers(currentLocation)
-                } else {
-                    _error.value = "Failed to activate SOS: ${result.exceptionOrNull()?.message}"
+                try {
+                    val locationResult = locationRepository.getLastLocation()
+                    val currentLocation = try { locationResult.getOrThrow() } catch (e: Exception) { null }
+                    
+                    // Create the incident - this also triggers notifications via SafetyRepository
+                    try {
+                        safetyRepository.createSafetyIncident(
+                            type = IncidentType.MANUAL_SOS,
+                            locationData = currentLocation,
+                            description = "Manual SOS triggered by user"
+                        )
+                        
+                        // In parallel with repository notification, also send directly
+                        // for redundancy and to ensure contacts are notified quickly
+                        coroutineScope {
+                            launch {
+                                // Get contacts from our pre-fetch operation
+                                val contacts = contactsFuture.await()
+                                if (contacts.isNotEmpty()) {
+                                    sendEmergencyMessagesDirectly(contacts, currentLocation, currentUser)
+                                }
+                            }
+                        }
+                        
+                        // Notify nearby community helpers in parallel
+                        coroutineScope {
+                            launch {
+                                notifyNearbyHelpers(currentLocation)
+                            }
+                        }
+                        
+                        withContext(Dispatchers.Main) {
+                            _isSosActive.value = true
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            _error.value = "Failed to activate SOS: ${e.message}"
+                            _isSosActive.value = false
+                        }
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        _error.value = "Failed to get location: ${e.message}"
+                        _isSosActive.value = false
+                    }
                 }
             } catch (e: Exception) {
-                _error.value = "Failed to activate SOS: ${e.message}"
+                withContext(Dispatchers.Main) {
+                    _error.value = "Failed to activate SOS: ${e.message}"
+                    _isSosActive.value = false
+                }
             } finally {
-                _isLoading.value = false
+                withContext(Dispatchers.Main) {
+                    _isLoading.value = false
+                }
             }
         }
     }
     
     /**
-     * Send emergency messages to contacts
+     * Fetch emergency contacts with caching
      */
-    private fun sendEmergencyMessages(location: LocationData?) {
-        viewModelScope.launch {
-            try {
-                val currentUser = auth.currentUser ?: return@launch
-                
-                // Get emergency contacts
-                val contactsSnapshot = firestore.collection("emergency_contacts")
-                    .whereEqualTo("userId", currentUser.uid)
-                    .get()
-                    .await()
-                
-                val contacts = contactsSnapshot.documents.mapNotNull { 
-                    it.getString("phoneNumber") 
-                }
-                
-                // Prepare message
-                val locationText = if (location != null) {
-                    "Location: https://maps.google.com/?q=${location.latitude},${location.longitude}"
-                } else {
-                    "Location not available"
-                }
-                
-                val message = "EMERGENCY ALERT: ${currentUser.displayName ?: "A user"} " +
-                        "has triggered an SOS emergency alert. ${locationText}"
-                
-                // Send SMS messages
-                var sent = 0
-                for (contact in contacts) {
-                    val result = smsService.sendEmergencySMS(contact, message)
-                    if (result.isSuccess) {
-                        sent++
-                    }
-                }
-                
-                _messagesSent.value = sent
-            } catch (e: Exception) {
-                Log.e("ManualSOS", "Error sending messages", e)
+    private suspend fun fetchEmergencyContacts(userId: String): List<String> {
+        // Check in-memory cache first
+        val cacheKey = "emergency_contacts_$userId"
+        val cachedContacts = _contactsCache[cacheKey]
+        if (cachedContacts != null && System.currentTimeMillis() - _contactsCacheTime < CACHE_EXPIRY_MS) {
+            return cachedContacts
+        }
+        
+        try {
+            val contactsSnapshot = firestore.collection("emergency_contacts")
+                .whereEqualTo("userId", userId)
+                .get()
+                .await()
+            
+            val contacts = contactsSnapshot.documents.mapNotNull { 
+                it.getString("phoneNumber") 
             }
+            
+            // Update the cache
+            _contactsCache[cacheKey] = contacts
+            _contactsCacheTime = System.currentTimeMillis()
+            
+            return contacts
+        } catch (e: Exception) {
+            Log.e("ManualSOS", "Failed to fetch contacts", e)
+            // Return cached contacts even if expired in case of error
+            return cachedContacts ?: emptyList()
+        }
+    }
+    
+    /**
+     * Send emergency messages directly to contacts for immediate notification
+     */
+    private suspend fun sendEmergencyMessagesDirectly(
+        contacts: List<String>,
+        location: LocationData?,
+        currentUser: com.google.firebase.auth.FirebaseUser
+    ) {
+        try {
+            if (!smsService.hasSmsPermission()) {
+                Log.e("ManualSOS", "SMS permission not granted")
+                return
+            }
+            
+            // Prepare message
+            val locationText = if (location != null) {
+                "Location: https://maps.google.com/?q=${location.latitude},${location.longitude}"
+            } else {
+                "Location not available"
+            }
+            
+            val message = "EMERGENCY ALERT: ${currentUser.displayName ?: "A user"} " +
+                    "has triggered an SOS emergency alert. ${locationText}"
+            
+            // Use parallel sending for better performance
+            val jobs = mutableListOf<Job>()
+            coroutineScope {
+                contacts.forEach { phoneNumber ->
+                    val job = launch {
+                        try {
+                            smsService.sendEmergencySMS(phoneNumber, message)
+                        } catch (e: Exception) {
+                            Log.e("ManualSOS", "Failed to send direct SMS to $phoneNumber", e)
+                        }
+                    }
+                    jobs.add(job)
+                }
+            
+                // Wait for all SMS sending jobs to complete
+                jobs.forEach { it.join() }
+            }
+            
+            // Update message count on main thread
+            withContext(Dispatchers.Main) {
+                _messagesSent.value = contacts.size
+            }
+        } catch (e: Exception) {
+            Log.e("ManualSOS", "Error sending direct messages", e)
         }
     }
     
@@ -194,17 +279,20 @@ class ManualSOSViewModel @Inject constructor(
      * Deactivate SOS
      */
     fun deactivateSOS() {
-        val currentUser = auth.currentUser ?: return
-        
         viewModelScope.launch {
-            _isLoading.value = true
             try {
-                val result = safetyRepository.resolveActiveIncident(currentUser.uid)
-                
-                if (result.isSuccess) {
+                _isLoading.value = true
+                val currentUser = auth.currentUser
+                    ?: throw IllegalStateException("User must be logged in to deactivate SOS")
+
+                try {
+                    safetyRepository.resolveActiveIncident(currentUser.uid)
                     _isSosActive.value = false
-                } else {
-                    _error.value = "Failed to deactivate SOS: ${result.exceptionOrNull()?.message}"
+                    
+                    // Inform emergency contacts that the emergency is resolved
+                    notifyContactsSOSDeactivated()
+                } catch (e: Exception) {
+                    _error.value = "Failed to deactivate SOS: ${e.message}"
                 }
             } catch (e: Exception) {
                 _error.value = "Failed to deactivate SOS: ${e.message}"
@@ -215,9 +303,59 @@ class ManualSOSViewModel @Inject constructor(
     }
     
     /**
+     * Notify emergency contacts that SOS has been deactivated
+     */
+    private fun notifyContactsSOSDeactivated() {
+        viewModelScope.launch {
+            try {
+                // Check if SMS permission is granted
+                if (!smsService.hasSmsPermission()) {
+                    return@launch
+                }
+                
+                val currentUser = auth.currentUser ?: return@launch
+                
+                // Get emergency contacts from Firestore
+                val contactsSnapshot = firestore.collection("emergency_contacts")
+                    .whereEqualTo("userId", currentUser.uid)
+                    .get()
+                    .await()
+                
+                val contactPhones = contactsSnapshot.documents.mapNotNull { 
+                    it.getString("phoneNumber") 
+                }
+                
+                if (contactPhones.isEmpty()) {
+                    return@launch
+                }
+                
+                // Send SMS to all contacts
+                for (phoneNumber in contactPhones) {
+                    // Create message
+                    val message = "SOS DEACTIVATED: I'm safe now. Thank you."
+                    
+                    // Send SMS
+                    try {
+                        smsService.sendSMS(phoneNumber, message)
+                    } catch (e: Exception) {
+                        _error.value = "Failed to notify contacts about SOS deactivation: ${e.message}"
+                    }
+                }
+            } catch (e: Exception) {
+                _error.value = "Failed to notify contacts about SOS deactivation: ${e.message}"
+            }
+        }
+    }
+    
+    /**
      * Clear error message
      */
     fun clearError() {
         _error.value = null
     }
+    
+    // Cache for emergency contacts
+    private val _contactsCache = mutableMapOf<String, List<String>>()
+    private var _contactsCacheTime = 0L
+    private val CACHE_EXPIRY_MS = 5 * 60 * 1000 // 5 minutes
 } 

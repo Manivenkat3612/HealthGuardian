@@ -3,18 +3,7 @@ package com.example.urban_safety.ui.screens.home
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -34,21 +23,8 @@ import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.People
 import androidx.compose.material.icons.rounded.Phone
 import androidx.compose.material.icons.rounded.Warning
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,6 +39,11 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.urban_safety.R
 import com.example.urban_safety.viewmodels.AuthViewModel
+import com.example.urban_safety.viewmodels.SOSViewModel
+import com.example.urban_safety.viewmodels.TestCenterViewModel
+import com.example.urban_safety.ui.screens.testing.TestResult
+import com.example.urban_safety.ui.screens.testing.TestResultSeverity
+import kotlinx.coroutines.delay
 
 data class Feature(
     val title: String,
@@ -132,6 +113,25 @@ fun HomeScreen(
         )
     )
 
+    var showSOSConfirmation by remember { mutableStateOf(false) }
+    val sosViewModel: SOSViewModel = hiltViewModel()
+    val isSOSActive by sosViewModel.isSOSActive.collectAsState()
+    val isLoading by sosViewModel.isLoading.collectAsState()
+    val error by sosViewModel.error.collectAsState()
+
+    // Listen for emergency situations from TestCenter
+    val testCenterViewModel: TestCenterViewModel = hiltViewModel()
+    val testResults by testCenterViewModel.uiState.collectAsState()
+    
+    // Check for critical conditions
+    LaunchedEffect(testResults) {
+        val criticalResults = testResults.testResults.filter { it.severity == TestResultSeverity.CRITICAL }
+        if (criticalResults.isNotEmpty()) {
+            // Automatically trigger SOS for critical conditions
+            sosViewModel.activateSOS()
+        }
+    }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -150,6 +150,13 @@ fun HomeScreen(
                 .padding(padding)
                 .padding(16.dp)
         ) {
+            // Show emergency alert if there are critical conditions
+            val criticalResults = testResults.testResults.filter { it.severity == TestResultSeverity.CRITICAL }
+            if (criticalResults.isNotEmpty()) {
+                EmergencyAlertCard(criticalResults)
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -163,7 +170,59 @@ fun HomeScreen(
             
             Spacer(modifier = Modifier.height(16.dp))
             
-            SOSButton(onClick = onNavigateToManualSOS)
+            SOSButton(
+                onClick = { showSOSConfirmation = true },
+                isActive = isSOSActive,
+                isLoading = isLoading
+            )
+        }
+    }
+
+    if (showSOSConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showSOSConfirmation = false },
+            title = { Text("Trigger Emergency SOS?") },
+            text = { 
+                Text(
+                    "This will immediately notify your emergency contacts with your current location. " +
+                    "Are you sure you want to proceed?"
+                ) 
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showSOSConfirmation = false
+                        sosViewModel.activateSOS()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Yes, Trigger SOS")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSOSConfirmation = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (error != null) {
+        LaunchedEffect(error) {
+            delay(5000)
+            sosViewModel.clearError()
+        }
+        Snackbar(
+            modifier = Modifier.padding(16.dp),
+            action = {
+                TextButton(onClick = { sosViewModel.clearError() }) {
+                    Text("Dismiss")
+                }
+            }
+        ) {
+            Text(error ?: "")
         }
     }
 }
@@ -206,7 +265,11 @@ fun FeatureCard(feature: Feature) {
 }
 
 @Composable
-fun SOSButton(onClick: () -> Unit) {
+fun SOSButton(
+    onClick: () -> Unit,
+    isActive: Boolean,
+    isLoading: Boolean
+) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -224,26 +287,82 @@ fun SOSButton(onClick: () -> Unit) {
                     .fillMaxSize()
                     .padding(8.dp),
                 shape = CircleShape,
-                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isActive) 
+                        MaterialTheme.colorScheme.error 
+                    else 
+                        MaterialTheme.colorScheme.error,
                     contentColor = MaterialTheme.colorScheme.onError
-                )
+                ),
+                enabled = !isLoading
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Warning,
-                        contentDescription = "SOS",
-                        modifier = Modifier.size(48.dp)
-                    )
-                    Text(
-                        text = "SOS",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold
-                    )
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(48.dp),
+                            color = MaterialTheme.colorScheme.onError
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.Warning,
+                            contentDescription = "SOS",
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Text(
+                            text = if (isActive) "SOS Active" else "SOS",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun EmergencyAlertCard(criticalResults: List<TestResult>) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = "Emergency",
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "EMERGENCY ALERT",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            criticalResults.forEach { result ->
+                Text(
+                    text = "• ${result.title}: ${result.description}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
             }
         }
     }

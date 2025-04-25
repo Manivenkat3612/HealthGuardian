@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @HiltViewModel
@@ -48,6 +50,15 @@ class SOSViewModel @Inject constructor(
                 }
             }
         }
+        
+        // Pre-fetch emergency contacts for faster access during emergencies
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                emergencyContactsRepository.getEmergencyContacts().first()
+            } catch (e: Exception) {
+                // Just pre-fetching, ok if it fails
+            }
+        }
     }
 
     fun activateSOS() {
@@ -55,40 +66,53 @@ class SOSViewModel @Inject constructor(
         _isLoading.value = true
         _error.value = null
 
-        viewModelScope.launch {
+        // Start notification process immediately on IO thread
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                val result = safetyRepository.createSafetyIncident(
-                    type = IncidentType.MANUAL_SOS,
-                    locationData = _currentLocation.value,
-                    description = "Manual SOS Activated: " + Constants.MANUAL_SOS
-                )
-                
-                if (result.isSuccess) {
-                    _isSOSActive.value = true
+                try {
+                    // Create incident
+                    safetyRepository.createSafetyIncident(
+                        type = IncidentType.MANUAL_SOS,
+                        locationData = _currentLocation.value,
+                        description = "Manual SOS Activated: " + Constants.MANUAL_SOS
+                    )
                     
-                    // Notify emergency contacts
-                    notifyEmergencyContacts(_currentLocation.value)
-                } else {
-                    _error.value = result.exceptionOrNull()?.message ?: "Failed to activate SOS"
-                    _isSOSActive.value = false
+                    withContext(Dispatchers.Main) {
+                        _isSOSActive.value = true
+                    }
+                    
+                    // Notify emergency contacts directly in this thread
+                    notifyEmergencyContactsDirectly(_currentLocation.value)
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        _error.value = e.message ?: "Failed to activate SOS"
+                        _isSOSActive.value = false
+                    }
                 }
             } catch (e: Exception) {
-                _error.value = e.message ?: "An unknown error occurred"
-                _isSOSActive.value = false
+                withContext(Dispatchers.Main) {
+                    _error.value = e.message ?: "An unknown error occurred"
+                    _isSOSActive.value = false
+                }
             } finally {
-                _isLoading.value = false
+                withContext(Dispatchers.Main) {
+                    _isLoading.value = false
+                }
             }
         }
     }
 
     /**
-     * Notify emergency contacts about the SOS activation
+     * Notify emergency contacts directly without relying on repository calls
+     * for faster emergency notifications
      */
-    private suspend fun notifyEmergencyContacts(locationData: LocationData?) {
+    private suspend fun notifyEmergencyContactsDirectly(locationData: LocationData?) {
         try {
             // Check if SMS permission is granted
             if (!smsService.hasSmsPermission()) {
-                _error.value = "SMS permission not granted. Emergency contacts will not be notified."
+                withContext(Dispatchers.Main) {
+                    _error.value = "SMS permission not granted. Emergency contacts will not be notified."
+                }
                 return
             }
             
@@ -96,24 +120,33 @@ class SOSViewModel @Inject constructor(
             val contacts = emergencyContactsRepository.getEmergencyContacts().first()
             
             if (contacts.isEmpty()) {
-                _error.value = "No emergency contacts found. Please add emergency contacts in settings."
+                withContext(Dispatchers.Main) {
+                    _error.value = "No emergency contacts found. Please add emergency contacts in settings."
+                }
                 return
             }
             
-            // Send SMS to all contacts
-            contacts.forEach { contact ->
-                // Create emergency message with location link
-                val message = "EMERGENCY SOS: I need help! " + 
-                    "My location: https://maps.google.com/?q=${locationData?.latitude},${locationData?.longitude}"
-                
-                // Send emergency SMS
-                val result = smsService.sendEmergencySMS(contact.phoneNumber, message)
-                if (result.isFailure) {
-                    _error.value = "Failed to send SMS to ${contact.name}: ${result.exceptionOrNull()?.message}"
+            // Send SMS to all contacts in parallel
+            contacts.map { contact ->
+                viewModelScope.launch(Dispatchers.IO) {
+                    // Create emergency message with location link
+                    val message = "EMERGENCY SOS: I need help! " + 
+                        "My location: https://maps.google.com/?q=${locationData?.latitude},${locationData?.longitude}"
+                    
+                    // Send emergency SMS
+                    try {
+                        smsService.sendEmergencySMS(contact.phoneNumber, message)
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            _error.value = "Failed to send SMS to ${contact.name}: ${e.message}"
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
-            _error.value = "Failed to notify emergency contacts: ${e.message}"
+            withContext(Dispatchers.Main) {
+                _error.value = "Failed to notify emergency contacts: ${e.message}"
+            }
         }
     }
 
@@ -153,16 +186,26 @@ class SOSViewModel @Inject constructor(
                 return
             }
             
-            // Send SMS to all contacts
+            // Send SMS to all contacts in parallel
             contacts.forEach { contact ->
-                // Create message
-                val message = "SOS DEACTIVATED: I'm safe now. Thank you."
-                
-                // Send SMS
-                smsService.sendSMS(contact.phoneNumber, message)
+                viewModelScope.launch(Dispatchers.IO) {
+                    // Create message
+                    val message = "SOS DEACTIVATED: I'm safe now. Thank you."
+                    
+                    // Send SMS
+                    try {
+                        smsService.sendSMS(contact.phoneNumber, message)
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            _error.value = "Failed to send deactivation SMS: ${e.message}"
+                        }
+                    }
+                }
             }
         } catch (e: Exception) {
-            _error.value = "Failed to notify contacts about SOS deactivation: ${e.message}"
+            withContext(Dispatchers.Main) {
+                _error.value = "Failed to notify contacts about SOS deactivation: ${e.message}"
+            }
         }
     }
 
@@ -175,31 +218,42 @@ class SOSViewModel @Inject constructor(
     }
 
     fun triggerSOS() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                _isLoading.value = true
+                withContext(Dispatchers.Main) {
+                    _isLoading.value = true
+                }
+                
                 // Use the last known location from repository
                 val locationResult = locationRepository.getLastLocation()
-                val locationData = locationResult.getOrNull()
+                val locationData = try { locationResult.getOrThrow() } catch (e: Exception) { null }
                 
-                val result = safetyRepository.createSafetyIncident(
-                    type = IncidentType.MANUAL_SOS,
-                    locationData = locationData,
-                    description = "SOS triggered"
-                )
-                
-                if (result.isSuccess) {
-                    _isSOSActive.value = true
+                try {
+                    safetyRepository.createSafetyIncident(
+                        type = IncidentType.MANUAL_SOS,
+                        locationData = locationData,
+                        description = "SOS triggered"
+                    )
+                    
+                    withContext(Dispatchers.Main) {
+                        _isSOSActive.value = true
+                    }
                     
                     // Notify emergency contacts
-                    notifyEmergencyContacts(locationData)
-                } else {
-                    _error.value = result.exceptionOrNull()?.message ?: "Failed to trigger SOS"
+                    notifyEmergencyContactsDirectly(locationData)
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        _error.value = e.message ?: "Failed to trigger SOS"
+                    }
                 }
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to trigger SOS"
+                withContext(Dispatchers.Main) {
+                    _error.value = e.message ?: "Failed to trigger SOS"
+                }
             } finally {
-                _isLoading.value = false
+                withContext(Dispatchers.Main) {
+                    _isLoading.value = false
+                }
             }
         }
     }

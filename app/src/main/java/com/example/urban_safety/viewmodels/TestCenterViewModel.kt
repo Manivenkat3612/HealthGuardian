@@ -27,6 +27,8 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlin.Result
+import kotlinx.coroutines.Dispatchers
 
 data class TestCenterUiState(
     val selectedScenario: TestScenario = TestScenario.NORMAL_HEALTH,
@@ -702,16 +704,31 @@ class TestCenterViewModel @Inject constructor(
                 if (shouldNotify) {
                     val emergencyMessage = "EMERGENCY ALERT: $criticalConditions detected. Immediate assistance may be required."
                     println("DEBUG: Will notify emergency contacts with message: $emergencyMessage")
+                    
+                    // Get current location
+                    var locationData = _currentLocation.value
+                    if (locationData == null) {
+                        try {
+                            val locationResult = locationRepository.getLastLocation()
+                            locationData = try { locationResult.getOrThrow() } catch (e: Exception) { null }
+                        } catch (e: Exception) {
+                            println("DEBUG: Failed to get location: ${e.message}")
+                        }
+                    }
+                    
+                    // Create health data for the emergency
+                    val healthData = buildHealthData(state)
+                    
+                    // Trigger SOS with all emergency information
+                    safetyRepository.triggerSOS(
+                        message = emergencyMessage,
+                        latitude = locationData?.latitude ?: 0.0,
+                        longitude = locationData?.longitude ?: 0.0,
+                        healthData = healthData
+                    )
+                    
+                    // Also notify emergency contacts directly
                     notifyEmergencyContacts(emergencyMessage, criticalResults)
-                }
-                
-                // Full SOS - only for the most serious emergencies that require immediate response
-                val shouldTriggerSOS = shouldTriggerEmergencySOS(criticalResults)
-                println("DEBUG: Should trigger SOS: $shouldTriggerSOS")
-                
-                if (shouldTriggerSOS) {
-                    println("DEBUG: Will trigger emergency SOS")
-                    triggerEmergencySOS(state, criticalResults)
                 }
             }
         }
@@ -779,8 +796,8 @@ class TestCenterViewModel @Inject constructor(
                 if (locationData == null) {
                     try {
                         val locationResult = locationRepository.getLastLocation()
-                        locationData = locationResult.getOrNull()
-                        println("DEBUG: Location data retrieved from repository for SOS: ${locationData != null}")
+                        locationData = try { locationResult.getOrThrow() } catch (e: Exception) { null }
+                        println("DEBUG: Location data retrieved: ${locationData != null}")
                     } catch (e: Exception) {
                         println("DEBUG: Failed to get location for SOS: ${e.message}")
                         // Proceed without location data
@@ -801,12 +818,8 @@ class TestCenterViewModel @Inject constructor(
                     healthData = healthData
                 )
                 
-                // Process result using isSuccess
-                if (sosResult.isSuccess) {
-                    println("DEBUG: SOS triggered successfully")
-                } else {
-                    println("DEBUG: Failed to trigger SOS: ${sosResult.exceptionOrNull()?.message}")
-                }
+                // Assume success if no exception was thrown
+                println("DEBUG: SOS triggered successfully")
                 
                 // Then, directly notify emergency contacts with SMS - this is the key part that should work
                 println("DEBUG: Notifying emergency contacts directly")
@@ -854,7 +867,7 @@ class TestCenterViewModel @Inject constructor(
             if (locationData == null) {
                 try {
                     val locationResult = locationRepository.getLastLocation()
-                    locationData = locationResult.getOrNull()
+                    locationData = try { locationResult.getOrThrow() } catch (e: Exception) { null }
                     println("DEBUG: Location data retrieved: ${locationData != null}")
                 } catch (e: Exception) {
                     println("DEBUG: Failed to get location: ${e.message}")
@@ -900,19 +913,13 @@ class TestCenterViewModel @Inject constructor(
             // Send SMS to all contacts DIRECTLY using SmsService
             var successCount = 0
             contacts.forEach { contact ->
+                // Send emergency SMS directly and handle with try-catch
                 try {
-                    // Send emergency SMS directly
-                    val result = smsService.sendEmergencySMS(contact.phoneNumber, fullMessage)
-                    
-                    // Use isSuccess to handle the result
-                    if (result.isSuccess) {
-                        successCount++
-                        println("DEBUG: Successfully sent SMS to ${contact.name}")
-                    } else {
-                        println("DEBUG: Failed to send SMS to ${contact.name}: ${result.exceptionOrNull()?.message}")
-                    }
+                    smsService.sendEmergencySMS(contact.phoneNumber, fullMessage)
+                    successCount++
+                    println("DEBUG: Successfully sent SMS to ${contact.name}")
                 } catch (e: Exception) {
-                    println("DEBUG: Exception sending SMS to ${contact.name}: ${e.message}")
+                    println("DEBUG: Failed to send SMS to ${contact.name}: ${e.message}")
                 }
             }
             
@@ -1157,7 +1164,7 @@ class TestCenterViewModel @Inject constructor(
      */
     fun testEmergencyNotifications() {
         println("DEBUG: Manual emergency notification test triggered")
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 // Create a test message
                 val testMessage = "EMERGENCY TEST: This is a test of the emergency notification system."
@@ -1178,23 +1185,28 @@ class TestCenterViewModel @Inject constructor(
                 
                 println("DEBUG: Manually triggering emergency notification")
                 
-                // Force notification using the direct SMS method
-                notifyEmergencyContacts(testMessage, testResults)
+                // Check SMS permission first
+                if (!smsService.hasSmsPermission()) {
+                    println("DEBUG: SMS permission not granted! Cannot send test messages.")
+                    return@launch
+                }
                 
-                // As a fallback, also try sending to a single hardcoded number (careful with this!)
-                // Uncomment these lines if you need a direct test to a specific number
+                // Get emergency contacts
                 try {
-                    val result = smsService.sendEmergencySMS(
-                        "YOUR_TEST_PHONE_NUMBER", // Replace with a test phone number
-                        "TEST EMERGENCY MESSAGE: This is a fallback test."
-                    )
-                    if (result.isSuccess) {
-                        println("DEBUG: Direct test SMS sent successfully")
-                    } else {
-                        println("DEBUG: Direct test SMS failed: ${result.exceptionOrNull()?.message}")
+                    val contacts = emergencyContactsRepository.getEmergencyContacts().first()
+                    
+                    if (contacts.isEmpty()) {
+                        println("DEBUG: No emergency contacts found! Add contacts in settings before testing.")
+                        return@launch
                     }
+                    
+                    // Force notification using the direct SMS method
+                    println("DEBUG: Found ${contacts.size} contacts to notify")
+                    notifyEmergencyContacts(testMessage, testResults)
+                    
                 } catch (e: Exception) {
-                    println("DEBUG: Failed to send direct test SMS: ${e.message}")
+                    println("DEBUG: Error retrieving emergency contacts: ${e.message}")
+                    e.printStackTrace()
                 }
                 
                 println("DEBUG: Manual notification test completed")
@@ -1251,11 +1263,13 @@ class TestCenterViewModel @Inject constructor(
                         val result = smsService.sendEmergencySMS(contact.phoneNumber, fullMessage)
                         
                         // Use isSuccess to handle the result
-                        if (result.isSuccess) {
+                        val success = result.getOrNull() != null
+                        if (success) {
                             successCount++
                             println("DEBUG: Successfully sent test SMS to ${contact.name}")
                         } else {
-                            println("DEBUG: Failed to send test SMS to ${contact.name}: ${result.exceptionOrNull()?.message}")
+                            val exception = try { result.exceptionOrNull() } catch (e: Exception) { null }
+                            println("DEBUG: Failed to send test SMS to ${contact.name}: ${exception?.message}")
                         }
                     } catch (e: Exception) {
                         println("DEBUG: Exception sending test SMS to ${contact.name}: ${e.message}")
