@@ -5,15 +5,27 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
-class PreferencesManager(context: Context) {
-    private val preferences: SharedPreferences = context.getSharedPreferences(
-        Constants.PREF_NAME,
-        Context.MODE_PRIVATE
-    )
+/**
+ * Manages local preferences and settings
+ */
+@Singleton
+class PreferencesManager @Inject constructor(
+    @ApplicationContext context: Context
+) {
+    private val prefsFileName = "health_guardian_prefs"
+    private val preferences: SharedPreferences = context.getSharedPreferences(prefsFileName, Context.MODE_PRIVATE)
     private val gson = Gson()
-
-    // User Preferences
+    
+    // First Run
+    var isFirstRun: Boolean
+        get() = preferences.getBoolean(Constants.KEY_FIRST_RUN, true)
+        set(value) = preferences.edit { putBoolean(Constants.KEY_FIRST_RUN, value) }
+    
+    // User Profile
     var userId: String
         get() = preferences.getString(Constants.KEY_USER_ID, "") ?: ""
         set(value) = preferences.edit { putString(Constants.KEY_USER_ID, value) }
@@ -30,41 +42,39 @@ class PreferencesManager(context: Context) {
         get() = preferences.getString(Constants.KEY_USER_PHONE, "") ?: ""
         set(value) = preferences.edit { putString(Constants.KEY_USER_PHONE, value) }
 
-    // Feature Toggles
-    var isSosActive: Boolean
-        get() = preferences.getBoolean(Constants.KEY_SOS_ACTIVE, false)
-        set(value) = preferences.edit { putBoolean(Constants.KEY_SOS_ACTIVE, value) }
-
-    var isHealthMonitoringEnabled: Boolean
-        get() = preferences.getBoolean(Constants.KEY_HEALTH_MONITORING_ENABLED, true)
-        set(value) = preferences.edit { putBoolean(Constants.KEY_HEALTH_MONITORING_ENABLED, value) }
-
-    var isVoiceSosEnabled: Boolean
-        get() = preferences.getBoolean(Constants.KEY_VOICE_SOS_ENABLED, true)
-        set(value) = preferences.edit { putBoolean(Constants.KEY_VOICE_SOS_ENABLED, value) }
-
-    var isGeofenceEnabled: Boolean
-        get() = preferences.getBoolean(Constants.KEY_GEOFENCE_ENABLED, true)
-        set(value) = preferences.edit { putBoolean(Constants.KEY_GEOFENCE_ENABLED, value) }
-
-    // Location tracking
-    fun getLocationTrackingEnabled(): Boolean {
-        return preferences.getBoolean(Constants.KEY_LOCATION_TRACKING_ENABLED, true)
+    // Settings - Replaced properties with methods to avoid JVM signature clashes
+    fun getLocationTracking(): Boolean {
+        return preferences.getBoolean(Constants.KEY_LOCATION_TRACKING_ENABLED, false)
     }
     
-    fun setLocationTrackingEnabled(enabled: Boolean) {
+    fun enableLocationTracking(enabled: Boolean) {
         preferences.edit { putBoolean(Constants.KEY_LOCATION_TRACKING_ENABLED, enabled) }
     }
     
-    // Voice recognition
-    fun getVoiceRecognitionEnabled(): Boolean {
-        return preferences.getBoolean(Constants.KEY_VOICE_RECOGNITION_ENABLED, true)
+    fun getVoiceRecognition(): Boolean {
+        return preferences.getBoolean(Constants.KEY_VOICE_SOS_ENABLED, false)
     }
     
-    fun setVoiceRecognitionEnabled(enabled: Boolean) {
-        preferences.edit { putBoolean(Constants.KEY_VOICE_RECOGNITION_ENABLED, enabled) }
+    fun enableVoiceRecognition(enabled: Boolean) {
+        preferences.edit { putBoolean(Constants.KEY_VOICE_SOS_ENABLED, enabled) }
     }
-
+    
+    fun getHealthMonitoring(): Boolean {
+        return preferences.getBoolean(Constants.KEY_HEALTH_MONITORING_ENABLED, false)
+    }
+    
+    fun enableHealthMonitoring(enabled: Boolean) {
+        preferences.edit { putBoolean(Constants.KEY_HEALTH_MONITORING_ENABLED, enabled) }
+    }
+    
+    fun getFallDetection(): Boolean {
+        return preferences.getBoolean(Constants.KEY_FALL_DETECTION_ENABLED, false)
+    }
+    
+    fun enableFallDetection(enabled: Boolean) {
+        preferences.edit { putBoolean(Constants.KEY_FALL_DETECTION_ENABLED, enabled) }
+    }
+    
     // Health Monitoring
     fun getHeartRateThreshold(): Int {
         return preferences.getInt("heart_rate_threshold", 120) // Default 120 BPM

@@ -206,7 +206,7 @@ class HealthMonitoringService : Service() {
      */
     private suspend fun checkForHealthAnomalies(healthData: HealthData, heartRateThreshold: Int) {
         // Skip if health monitoring is not enabled in user preferences
-        if (!preferencesManager.isHealthMonitoringEnabled) {
+        if (!preferencesManager.getHealthMonitoring()) {
             return
         }
         

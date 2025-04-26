@@ -11,7 +11,7 @@ object Constants {
     const val GEOFENCE_TRIGGERED = "GEOFENCE_TRIGGERED"
 
     // Shared Preferences Keys
-    const val PREF_NAME = "urban_safety_preferences"
+    const val PREF_NAME = "health_guardian_prefs"
     const val KEY_USER_ID = "user_id"
     const val KEY_USER_NAME = "user_name"
     const val KEY_USER_EMAIL = "user_email"
@@ -24,6 +24,8 @@ object Constants {
     const val KEY_GEOFENCE_ENABLED = "geofence_enabled"
     const val KEY_LOCATION_TRACKING_ENABLED = "location_tracking_enabled"
     const val KEY_VOICE_RECOGNITION_ENABLED = "voice_recognition_enabled"
+    const val KEY_FALL_DETECTION_ENABLED = "fall_detection_enabled"
+    const val KEY_FIRST_RUN = "first_run"
 
     // Notification Channels
     const val SOS_NOTIFICATION_CHANNEL_ID = "sos_notifications"
@@ -39,7 +41,7 @@ object Constants {
     const val ACTIVITY_RECOGNITION_REQUEST_CODE = 1005
 
     // Time Intervals (in milliseconds)
-    const val LOCATION_UPDATE_INTERVAL = 30000L // 30 seconds
+    const val LOCATION_UPDATE_INTERVAL = 60000L // 1 minute
     const val HEALTH_CHECK_INTERVAL = 60000L // 1 minute
     const val SOS_TIMEOUT = 300000L // 5 minutes
     const val GEOFENCE_LOITERING_DELAY = 300000L // 5 minutes
@@ -53,4 +55,22 @@ object Constants {
     const val SOS_REQUESTS_COLLECTION = "sos_requests"
     const val COMMUNITY_HELPERS_COLLECTION = "community_helpers"
     const val HELP_REQUESTS_COLLECTION = "help_requests"
+
+    // Incident Types
+    const val INCIDENT_TYPE_MANUAL_SOS = "manual_sos"
+    const val INCIDENT_TYPE_FALL = "fall_detection"
+    const val INCIDENT_TYPE_HEALTH = "health_emergency"
+    const val INCIDENT_TYPE_VOICE = "voice_activated"
+
+    // Notification Channels
+    const val CHANNEL_SOS = "sos_channel"
+    const val CHANNEL_HEALTH = "health_channel"
+    const val CHANNEL_LOCATION = "location_channel"
+
+    // Firebase Collections
+    const val COLLECTION_USERS = "users"
+    const val COLLECTION_INCIDENTS = "incidents"
+    const val COLLECTION_HEALTH_DATA = "health_data"
+    const val COLLECTION_EMERGENCY_CONTACTS = "emergency_contacts"
+    const val COLLECTION_SOS_ALERTS = "sos_alerts"
 } 

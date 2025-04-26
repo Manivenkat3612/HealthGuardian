@@ -154,7 +154,7 @@ class VoiceRecognitionService : Service() {
         startForeground(NOTIFICATION_ID, createNotification())
         
         // Check if voice activation is enabled
-        if (preferencesManager.isVoiceSosEnabled) {
+        if (preferencesManager.getVoiceRecognition()) {
             // Update activation keyword if specified in user preferences
             val keyword = "help" // Default fallback
             activationKeyword = keyword

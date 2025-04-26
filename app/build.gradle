@@ -130,4 +130,7 @@ dependencies {
 
     // OkHttp for network requests
     implementation 'com.squareup.okhttp3:okhttp:4.9.3'
+
+    // CardView dependency
+    implementation("androidx.cardview:cardview:1.0.0")
 } 

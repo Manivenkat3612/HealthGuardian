@@ -31,19 +31,24 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.urban_safety.R
+import com.example.urban_safety.ui.components.FallDetectionControl
 import com.example.urban_safety.viewmodels.AuthViewModel
 import com.example.urban_safety.viewmodels.SOSViewModel
 import com.example.urban_safety.viewmodels.TestCenterViewModel
 import com.example.urban_safety.ui.screens.testing.TestResult
 import com.example.urban_safety.ui.screens.testing.TestResultSeverity
 import kotlinx.coroutines.delay
+import com.example.urban_safety.viewmodels.FallDetectionViewModel
 
 data class Feature(
     val title: String,
@@ -123,6 +128,17 @@ fun HomeScreen(
     val testCenterViewModel: TestCenterViewModel = hiltViewModel()
     val testResults by testCenterViewModel.uiState.collectAsState()
     
+    // Initialize the FallDetectionViewModel at the composable level
+    val fallDetectionViewModel: FallDetectionViewModel = hiltViewModel()
+    
+    // Permission request launcher for fall detection
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        // Use the ViewModel initialized at composable level
+        fallDetectionViewModel.handlePermissionResult(permissions)
+    }
+    
     // Check for critical conditions
     LaunchedEffect(testResults) {
         val criticalResults = testResults.testResults.filter { it.severity == TestResultSeverity.CRITICAL }
@@ -156,6 +172,15 @@ fun HomeScreen(
                 EmergencyAlertCard(criticalResults)
                 Spacer(modifier = Modifier.height(16.dp))
             }
+            
+            // Fall Detection Control
+            FallDetectionControl(
+                onRequestPermissions = { permissions ->
+                    permissionLauncher.launch(permissions)
+                }
+            )
+            
+            Spacer(modifier = Modifier.height(16.dp))
 
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
@@ -198,7 +223,7 @@ fun HomeScreen(
                         containerColor = MaterialTheme.colorScheme.error
                     )
                 ) {
-                    Text("Yes, Trigger SOS")
+                    Text("Trigger SOS")
                 }
             },
             dismissButton = {
